@@ -13,6 +13,7 @@ tasks:
     #   - echo "{{.GREETING}}"
     # silent: true
   docs:
-    dir: assets/contract_templates
+    dir: assets/templates
     cmds:
       - libreoffice --headless --convert-to pdf *.doc
+      - libreoffice --headless --convert-to pdf *.docx
