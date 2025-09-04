@@ -1,5 +1,5 @@
-# contracto
+# Gesetzt
 
-Playground for signing contracts (java)
-using LLMs on contracts (python)
+Playground for signing laws (java)
+using LLMs on laws (python)
 and cloud deployments (docker, k8s, azure)
