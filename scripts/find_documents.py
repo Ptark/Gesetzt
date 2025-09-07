@@ -6,6 +6,7 @@
 # ]
 # ///
 
+import hashlib
 import os
 from pathlib import Path
 import random
@@ -25,10 +26,31 @@ PDF_PATTERN = re.compile(r"\.pdf$")
 
 
 def random_sleep(min_sec=1, max_sec=3, factor=1.0):
-    t = random.uniform(min_sec, max_sec)
-    t *= factor
+    t = random.uniform(min_sec, max_sec) * factor
     print(f"    Sleeping for {t:.2f}s...")
     time.sleep(t)
+
+
+def sanitize_filename(text: str, max_length: int = 120) -> str:
+    """Make a safe filename, ensure .pdf extension, and shorten with hash if too long."""
+    text = (text or "document").strip()
+    text = text.replace("/", "-")
+    text = re.sub(r"[^\w\-.() ]+", "_", text)
+    if not text.lower().endswith(".pdf"):
+        text = f"{text}.pdf"
+
+    if len(text) <= max_length:
+        return text
+
+    base, ext = text.rsplit(".", 1)
+    hash_suffix = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+    # reserve room for "_" + hash + "." + ext
+    keep = max_length - (1 + len(hash_suffix) + 1 + len(ext))
+    if keep <= 0:
+        # fallback: use hash only
+        return f"{hash_suffix}.{ext}"
+    short_base = base[:keep]
+    return f"{short_base}_{hash_suffix}.{ext}"
 
 
 def find_xx_xx_links(soup: BeautifulSoup) -> list[str]:
@@ -36,49 +58,66 @@ def find_xx_xx_links(soup: BeautifulSoup) -> list[str]:
     for element in soup.find_all("a", string=XX_XX_PATTERN):
         if not isinstance(element, Tag):
             continue
-        if not element.get("href"):
+        href = element.get("href")
+        if not href:
             continue
-        results.append(str(element["href"]))
+        results.append(str(href))
     return results
 
 
-def find_first_pdf_link(soup: BeautifulSoup) -> str | None:
-    link: Tag = cast(Tag, soup.find_next("a"))
-    while link and not link["href"]:
-        link = cast(Tag, link.find_next("a"))
-    return str(link.get("href")) if link else None
+def find_first_pdf_link(soup: BeautifulSoup) -> tuple[str, str] | None:
+    """
+    On a law page, find the first PDF anchor (likely the real law text).
+    Return (text, href) or None.
+    """
+    a = soup.find("a", href=lambda h: h and PDF_PATTERN.search(h))  # pyright: ignore
+    if not a or not isinstance(a, Tag):
+        return None
+    href = a.get("href")
+    if not href:
+        return None
+    text = a.get_text(strip=True) or os.path.basename(str(href))
+    return text, str(href)
 
 
 def find_metadata_and_follow_links(soup: BeautifulSoup) -> list[tuple[str, str]]:
     """Find metadata PDF and the link that follows right after."""
     results = []
-    for element in soup.find_all("a", href=lambda h: h and PDF_PATTERN.search(h)):
-        if not cast(Tag, element).get("href"):
+    for element in soup.find_all("a", href=lambda h: h and PDF_PATTERN.search(h)):  # pyright: ignore
+        if not isinstance(element, Tag):
+            continue
+        meta_href = element.get("href")
+        if not meta_href:
             continue
         print(element)
-        link: Tag = cast(Tag, element.find_next("a"))
-        while link and not link.get("href"):
-            link = cast(Tag, link.find_next("a"))
-            print(f"    {link}")
-        if link and link.get("href"):
-            results.append((element.get_text(strip=True), link["href"]))
-    print("")
+        meta_text = element.get_text(strip=True) or os.path.basename(str(meta_href))
+        follow_href: str | None = None
+        for next_a in element.find_all_next("a"):
+            if not isinstance(next_a, Tag):
+                continue
+            nh = next_a.get("href")
+            if nh:
+                follow_href = str(nh)
+                break
+
+        if follow_href:
+            results.append((meta_text, follow_href))
     return results
 
 
-def download_file(url, filename, output_dir=DOCUMENT_DIR):
-    output_dir.mkdir(exist_ok=True)
+def download_file(url: str, filename: str, output_dir=DOCUMENT_DIR):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = sanitize_filename(filename, max_length=120)
     path = output_dir / filename
     if path.exists():
         print(f"    Already Exists, skipping: {filename}.")
         return
-    resp = requests.get(url)
-    resp.raise_for_status()
-
-    if len(str(path)) > 55:
-        path = f"{str(path)[:50]}.pdf"
-    with open(path, "wb") as f:
-        f.write(resp.content)
+    with requests.get(url, stream=True) as resp:
+        resp.raise_for_status()
+        with open(path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
     print(f"    Saved: {filename}")
 
 
@@ -116,10 +155,17 @@ def main() -> None:
                 print(f"{e}")
                 continue
 
-            pdf_link = find_first_pdf_link(law_soup)
-            pdf_url = urljoin(full_url, pdf_link)
-            fname = os.path.basename(pdf_url)
-            download_file(pdf_url, fname)
+            pdf_tuple = find_first_pdf_link(law_soup)
+            if not pdf_tuple:
+                print(" No PDF found")
+                continue
+            pdf_text, pdf_href = pdf_tuple
+            pdf_url = urljoin(law_page_url, pdf_href)
+            fname = pdf_text
+            try:
+                download_file(pdf_url, fname)
+            except Exception as e:
+                print(f"{e}")
             random_sleep()
         random_sleep()
 
