@@ -10,15 +10,18 @@ import os
 from pathlib import Path
 import random
 import re
+from typing import cast
 import time
 from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 
 URL = "https://www.ris.bka.gv.at/UI/Bund/Bundesnormen/IndexBundesrecht.aspx?TabbedMenuSelection=BundesrechtTab"
 DOCUMENT_DIR = Path("documents")
+XX_XX_PATTERN = re.compile(r"^\d{2}/\d{2}")
+PDF_PATTERN = re.compile(r"\.pdf$")
 
 
 def random_sleep(min_sec=1, max_sec=3, factor=1.0):
@@ -28,16 +31,39 @@ def random_sleep(min_sec=1, max_sec=3, factor=1.0):
     time.sleep(t)
 
 
-def find_xx_xx_links(soup):
-    pattern = re.compile(r"^\d{2}/\d{2}")
-    return [a["href"] for a in soup.find_all("a", string=pattern) if a.get("href")]
+def find_xx_xx_links(soup: BeautifulSoup) -> list[str]:
+    results: list[str] = []
+    for element in soup.find_all("a", string=XX_XX_PATTERN):
+        if not isinstance(element, Tag):
+            continue
+        if not element.get("href"):
+            continue
+        results.append(str(element["href"]))
+    return results
 
 
-def find_pdf_links(soup):
-    return [
-        a["href"]
-        for a in soup.find_all("a", href=lambda h: h and h.lower().endswith(".pdf"))
-    ]
+def find_first_pdf_link(soup: BeautifulSoup) -> str | None:
+    link: Tag = cast(Tag, soup.find_next("a"))
+    while link and not link["href"]:
+        link = cast(Tag, link.find_next("a"))
+    return str(link.get("href")) if link else None
+
+
+def find_metadata_and_follow_links(soup: BeautifulSoup) -> list[tuple[str, str]]:
+    """Find metadata PDF and the link that follows right after."""
+    results = []
+    for element in soup.find_all("a", href=lambda h: h and PDF_PATTERN.search(h)):
+        if not cast(Tag, element).get("href"):
+            continue
+        print(element)
+        link: Tag = cast(Tag, element.find_next("a"))
+        while link and not link.get("href"):
+            link = cast(Tag, link.find_next("a"))
+            print(f"    {link}")
+        if link and link.get("href"):
+            results.append((element.get_text(strip=True), link["href"]))
+    print("")
+    return results
 
 
 def download_file(url, filename, output_dir=DOCUMENT_DIR):
@@ -48,12 +74,15 @@ def download_file(url, filename, output_dir=DOCUMENT_DIR):
         return
     resp = requests.get(url)
     resp.raise_for_status()
+
+    if len(str(path)) > 55:
+        path = f"{str(path)[:50]}.pdf"
     with open(path, "wb") as f:
         f.write(resp.content)
     print(f"    Saved: {filename}")
 
 
-def get_soup(url):
+def get_soup(url) -> BeautifulSoup:
     resp = requests.get(url)
     resp.raise_for_status()
     return BeautifulSoup(resp.text, "html.parser")
@@ -74,14 +103,24 @@ def main() -> None:
             print(f"    Error fetching {full_url}: {e}")
             continue
 
-        pdf_links = find_pdf_links(page_soup)
-        print(f"    Found {len(pdf_links)} PDF(s) on page.")
-        for pdf in pdf_links:
-            print(pdf)
-            pdf_url = urljoin(full_url, pdf)
+        meta_links = find_metadata_and_follow_links(page_soup)
+        print(f"found {len(meta_links)} metadata links")
+
+        for meta_text, follow_href in meta_links:
+            law_page_url = urljoin(full_url, follow_href)
+            print(f"{law_page_url}")
+
+            try:
+                law_soup = get_soup(law_page_url)
+            except Exception as e:
+                print(f"{e}")
+                continue
+
+            pdf_link = find_first_pdf_link(law_soup)
+            pdf_url = urljoin(full_url, pdf_link)
             fname = os.path.basename(pdf_url)
             download_file(pdf_url, fname)
-            random_sleep(1, 3, 0.1)
+            random_sleep()
         random_sleep()
 
 
