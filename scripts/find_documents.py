@@ -36,6 +36,7 @@ def sanitize_filename(text: str, max_length: int = 120) -> str:
     text = (text or "document").strip()
     text = text.replace("/", "-")
     text = re.sub(r"[^\w\-.() ]+", "_", text)
+    text = text.replace("20_", "_")
     if not text.lower().endswith(".pdf"):
         text = f"{text}.pdf"
 
