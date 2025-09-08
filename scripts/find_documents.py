@@ -51,6 +51,7 @@ def sanitize_filename(text: str, max_length: int = 120) -> str:
         # fallback: use hash only
         return f"{hash_suffix}.{ext}"
     short_base = base[:keep]
+    # TODO: make text utf-8
     return f"{short_base}_{hash_suffix}.{ext}"
 
 

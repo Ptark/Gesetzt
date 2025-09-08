@@ -9,5 +9,8 @@ dependencies = [
     "langchain-chroma>=0.2.5",
     "langchain-community>=0.3.29",
     "langchain-google-genai>=2.1.10",
+    "loguru>=0.7.3",
     "pydantic-settings>=2.10.1",
+    "pypdf>=6.0.0",
+    "streamlit>=1.49.1",
 ]
